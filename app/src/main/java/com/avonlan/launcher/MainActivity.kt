@@ -1,5 +1,10 @@
 package com.avonlan.launcher
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.graphicsLayer
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Intent
@@ -41,6 +46,10 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
 
 data class LauncherApp(
     val name: String,
@@ -516,6 +525,10 @@ fun HomeScreen(
         }
     }
 }
+private fun letterOf(label: String): Char {
+    val c = label.trim().firstOrNull()?.uppercaseChar() ?: '#'
+    return if (c.isLetter()) c else '#'
+}
 
 @Composable
 fun DrawerScreen(
@@ -529,10 +542,43 @@ fun DrawerScreen(
     val s = settings.textSize.scale
     val onBg = MaterialTheme.colorScheme.onBackground
     var query by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
 
     val filtered = remember(apps, query) {
         if (query.isBlank()) apps
         else apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
+    }
+
+    val firstIndex = remember(filtered) {
+        val map = LinkedHashMap<Char, Int>()
+        filtered.forEachIndexed { i, app ->
+            val c = letterOf(app.label)
+            if (!map.containsKey(c)) map[c] = i
+        }
+        map
+    }
+    val letters = remember(firstIndex) { firstIndex.keys.toList() }
+    val showBar = query.isBlank() && letters.size > 1
+
+    var activeLetter by remember { mutableStateOf<Char?>(null) }
+    var barHeight by remember { mutableIntStateOf(0) }
+
+    val jump: (Float) -> Unit = { y ->
+        if (letters.isNotEmpty() && barHeight > 0) {
+            val i = (y / barHeight * letters.size).toInt().coerceIn(0, letters.size - 1)
+            val l = letters[i]
+            if (l != activeLetter) {
+                activeLetter = l
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                firstIndex[l]?.let { idx -> scope.launch { listState.scrollToItem(idx) } }
+            }
+        }
+    }
+
+    LaunchedEffect(query) {
+        listState.scrollToItem(0)
     }
 
     LaunchedEffect(query) {
@@ -590,22 +636,83 @@ fun DrawerScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(filtered, key = { it.packageName }) { app ->
-                Text(
-                    text = app.label,
-                    fontSize = (18f * s).sp,
-                    color = onBg,
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+        ) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(end = if (showBar) 32.dp else 0.dp)
+            ) {
+                items(filtered, key = { it.packageName }) { app ->
+                    Text(
+                        text = app.label,
+                        fontSize = (18f * s).sp,
+                        color = onBg,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .pointerInput(app.packageName) {
+                                detectTapGestures(
+                                    onTap = { onSelect(app) },
+                                    onLongPress = { onLongPressApp(app) }
+                                )
+                            }
+                            .padding(vertical = 12.dp)
+                    )
+                }
+            }
+
+            if (showBar) {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .pointerInput(app.packageName) {
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(32.dp)
+                        .onSizeChanged { barHeight = it.height }
+                        .pointerInput(letters) {
                             detectTapGestures(
-                                onTap = { onSelect(app) },
-                                onLongPress = { onLongPressApp(app) }
+                                onTap = { offset ->
+                                    jump(offset.y)
+                                    activeLetter = null
+                                }
                             )
                         }
-                        .padding(vertical = 12.dp)
-                )
+                        .pointerInput(letters) {
+                            detectVerticalDragGestures(
+                                onDragStart = { offset -> jump(offset.y) },
+                                onVerticalDrag = { change, _ -> jump(change.position.y) },
+                                onDragEnd = { activeLetter = null },
+                                onDragCancel = { activeLetter = null }
+                            )
+                        },
+                    verticalArrangement = Arrangement.SpaceEvenly,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    letters.forEach { l ->
+                        Text(
+                            text = l.toString(),
+                            fontSize = (11f * s).sp,
+                            color = if (l == activeLetter) onBg else onBg.copy(alpha = 0.45f)
+                        )
+                    }
+                }
+            }
+
+            activeLetter?.let { l ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(88.dp),
+                    shape = MaterialTheme.shapes.large,
+                    color = onBg.copy(alpha = 0.12f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(l.toString(), fontSize = 40.sp, color = onBg)
+                    }
+                }
             }
         }
     }
