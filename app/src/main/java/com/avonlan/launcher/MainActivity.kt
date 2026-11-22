@@ -1,10 +1,5 @@
 package com.avonlan.launcher
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.ui.graphics.graphicsLayer
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Intent
@@ -50,6 +45,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.graphicsLayer
 
 data class LauncherApp(
     val name: String,
@@ -525,53 +525,7 @@ fun HomeScreen(
         }
     }
 }
-private fun letterOf(label: String): Char {
-    val c = label.trim().firstOrNull()?.uppercaseChar() ?: '#'
-    return if (c.isLetter()) c else '#'
-}
 
-@Composable
-fun DrawerScreen(
-    apps: List<UiApp>,
-    settings: AvonlanSettings,
-    pickMode: Boolean,
-    onSelect: (UiApp) -> Unit,
-    onLongPressApp: (UiApp) -> Unit,
-    onClearSlot: () -> Unit
-) {
-    val s = settings.textSize.scale
-    val onBg = MaterialTheme.colorScheme.onBackground
-    var query by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val haptic = LocalHapticFeedback.current
-
-    val filtered = remember(apps, query) {
-        if (query.isBlank()) apps
-        else apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
-    }
-
-    val firstIndex = remember(filtered) {
-        val map = LinkedHashMap<Char, Int>()
-        filtered.forEachIndexed { i, app ->
-            val c = letterOf(app.label)
-            if (!map.containsKey(c)) map[c] = i
-        }
-        map
-    }
-    val letters = remember(firstIndex) { firstIndex.keys.toList() }
-    val showBar = query.isBlank() && letters.size > 1
-
-    var activeLetter by remember { mutableStateOf<Char?>(null) }
-    var barHeight by remember { mutableIntStateOf(0) }
-
-    val jump: (Float) -> Unit = { y ->
-        if (letters.isNotEmpty() && barHeight > 0) {
-            val i = (y / barHeight * letters.size).toInt().coerceIn(0, letters.size - 1)
-            val l = letters[i]
-            if (l != activeLetter) {
-                activeLetter = l
-                   ) 
 private fun letterOf(label: String): Char {
     val c = label.trim().firstOrNull()?.uppercaseChar() ?: '#'
     return if (c in 'A'..'Z') c else '#'
