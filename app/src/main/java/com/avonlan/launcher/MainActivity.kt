@@ -1,10 +1,5 @@
 package com.avonlan.launcher
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.ui.graphics.graphicsLayer
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Intent
@@ -46,10 +41,6 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalHapticFeedback
 
 data class LauncherApp(
     val name: String,
@@ -526,11 +517,6 @@ fun HomeScreen(
     }
 }
 
-private fun letterOf(label: String): Char {
-    val c = label.trim().firstOrNull()?.uppercaseChar() ?: '#'
-    return if (c.isLetter()) c else '#'
-}
-
 @Composable
 fun DrawerScreen(
     apps: List<UiApp>,
@@ -543,43 +529,10 @@ fun DrawerScreen(
     val s = settings.textSize.scale
     val onBg = MaterialTheme.colorScheme.onBackground
     var query by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val haptic = LocalHapticFeedback.current
 
     val filtered = remember(apps, query) {
         if (query.isBlank()) apps
         else apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
-    }
-
-    val firstIndex = remember(filtered) {
-        val map = LinkedHashMap<Char, Int>()
-        filtered.forEachIndexed { i, app ->
-            val c = letterOf(app.label)
-            if (!map.containsKey(c)) map[c] = i
-        }
-        map
-    }
-    val letters = remember(firstIndex) { firstIndex.keys.toList() }
-    val showBar = query.isBlank() && letters.size > 1
-
-    var activeLetter by remember { mutableStateOf<Char?>(null) }
-    var barHeight by remember { mutableIntStateOf(0) }
-
-    val jump: (Float) -> Unit = { y ->
-        if (letters.isNotEmpty() && barHeight > 0) {
-            val i = (y / barHeight * letters.size).toInt().coerceIn(0, letters.size - 1)
-            val l = letters[i]
-            if (l != activeLetter) {
-                activeLetter = l
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                firstIndex[l]?.let { idx -> scope.launch { listState.scrollToItem(idx) } }
-            }
-        }
-    }
-
-    LaunchedEffect(query) {
-        listState.scrollToItem(0)
     }
 
     LaunchedEffect(query) {
@@ -637,265 +590,22 @@ fun DrawerScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(end = if (showBar) 32.dp else 0.dp)
-            ) {
-                items(filtered, key = { it.packageName }) { app ->
-                    Text(
-                        text = app.label,
-                        fontSize = (18f * s).sp,
-                        color = onBg,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .pointerInput(app.packageName) {
-                                detectTapGestures(
-                                    onTap = { onSelect(app) },
-                                    onLongPress = { onLongPressApp(app) }
-                                )
-                            }
-                            .padding(vertical = 12.dp)
-                    )
-                }
-                
-private fun letterOf(label: String): Char {
-    val c = label.trim().firstOrNull()?.uppercaseChar() ?: '#'
-    return if (c in 'A'..'Z') c else '#'
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun DrawerScreen(
-    apps: List<UiApp>,
-    settings: AvonlanSettings,
-    pickMode: Boolean,
-    onSelect: (UiApp) -> Unit,
-    onLongPressApp: (UiApp) -> Unit,
-    onClearSlot: () -> Unit
-) {
-    val s = settings.textSize.scale
-    val onBg = MaterialTheme.colorScheme.onBackground
-    var query by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val haptic = LocalHapticFeedback.current
-
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val progress by animateFloatAsState(
-        targetValue = if (shown) 1f else 0f,
-        animationSpec = tween(220),
-        label = "drawerIn"
-    )
-
-    val filtered = remember(apps, query) {
-        if (query.isBlank()) apps
-        else apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
-    }
-
-    val sections = remember(filtered, query) {
-        if (query.isNotBlank()) {
-            listOf('\u0000' to filtered)
-        } else {
-            filtered
-                .groupBy { letterOf(it.label) }
-                .toSortedMap(compareBy<Char> { if (it == '#') Char.MAX_VALUE else it })
-                .map { (letter, list) -> letter to list }
-        }
-    }
-
-    val firstIndex = remember(sections) {
-        val map = LinkedHashMap<Char, Int>()
-        var index = 0
-        sections.forEach { (letter, list) ->
-            map[letter] = index
-            index += 1 + list.size
-        }
-        map
-    }
-    val letters = remember(firstIndex) { firstIndex.keys.toList() }
-    val showBar = query.isBlank() && letters.size > 1
-
-    var activeLetter by remember { mutableStateOf<Char?>(null) }
-    var barHeight by remember { mutableIntStateOf(0) }
-
-    val jump: (Float) -> Unit = { y ->
-        if (letters.isNotEmpty() && barHeight > 0) {
-            val i = (y / barHeight * letters.size).toInt().coerceIn(0, letters.size - 1)
-            val l = letters[i]
-            if (l != activeLetter) {
-                activeLetter = l
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                firstIndex[l]?.let { idx -> scope.launch { listState.scrollToItem(idx) } }
-            }
-        }
-    }
-
-    LaunchedEffect(query) {
-        listState.scrollToItem(0)
-    }
-
-    LaunchedEffect(query) {
-        if (settings.autoLaunch && !pickMode && query.isNotBlank()) {
-            delay(400)
-            val matches = apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
-            if (matches.size == 1) onSelect(matches[0])
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                alpha = progress
-                translationY = (1f - progress) * 48.dp.toPx()
-            }
-            .systemBarsPadding()
-            .imePadding()
-            .padding(horizontal = 24.dp)
-    ) {
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            if (pickMode) "PILIH APP FAVORIT" else "APPLICATIONS",
-            fontSize = (18f * s).sp,
-            color = onBg,
-            fontWeight = FontWeight.Medium
-        )
-
-        if (pickMode) {
-            TextButton(onClick = onClearSlot) {
-                Text("Kosongkan slot ini", color = onBg.copy(alpha = 0.6f))
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        BasicTextField(
-            value = query,
-            onValueChange = { query = it },
-            singleLine = true,
-            cursorBrush = SolidColor(onBg),
-            textStyle = TextStyle(color = onBg, fontSize = (16f * s).sp),
-            decorationBox = { innerTextField ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text(
-                            "Search apps...",
-                            fontSize = (16f * s).sp,
-                            color = onBg.copy(alpha = 0.4f)
-                        )
-                    }
-                    innerTextField()
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(end = if (showBar) 32.dp else 0.dp)
-            ) {
-                sections.forEach { (letter, list) ->
-                    if (letter != '\u0000') {
-                        stickyHeader(key = "header_$letter") {
-                            Text(
-                                text = letter.toString(),
-                                fontSize = (13f * s).sp,
-                                fontWeight = FontWeight.Medium,
-                                color = onBg.copy(alpha = 0.5f),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.background)
-                                    .padding(top = 12.dp, bottom = 4.dp)
-                            )
-                        }
-                    }
-
-                    items(list, key = { it.packageName }) { app ->
-                        Text(
-                            text = app.label,
-                            fontSize = (18f * s).sp,
-                            color = onBg,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .animateItem()
-                                .pointerInput(app.packageName) {
-                                    detectTapGestures(
-                                        onTap = { onSelect(app) },
-                                        onLongPress = { onLongPressApp(app) }
-                                    )
-                                }
-                                .padding(vertical = 12.dp)
-                        )
-                    }
-                }
-            }
-
-            if (showBar) {
-                Column(
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(filtered, key = { it.packageName }) { app ->
+                Text(
+                    text = app.label,
+                    fontSize = (18f * s).sp,
+                    color = onBg,
                     modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .fillMaxHeight()
-                        .width(32.dp)
-                        .onSizeChanged { barHeight = it.height }
-                        .pointerInput(letters) {
+                        .fillMaxWidth()
+                        .pointerInput(app.packageName) {
                             detectTapGestures(
-                                onTap = { offset ->
-                                    jump(offset.y)
-                                    activeLetter = null
-                                }
+                                onTap = { onSelect(app) },
+                                onLongPress = { onLongPressApp(app) }
                             )
                         }
-                        .pointerInput(letters) {
-                            detectVerticalDragGestures(
-                                onDragStart = { offset -> jump(offset.y) },
-                                onVerticalDrag = { change, _ -> jump(change.position.y) },
-                                onDragEnd = { activeLetter = null },
-                                onDragCancel = { activeLetter = null }
-                            )
-                        },
-                    verticalArrangement = Arrangement.SpaceEvenly,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    letters.forEach { l ->
-                        Text(
-                            text = l.toString(),
-                            fontSize = (11f * s).sp,
-                            color = if (l == activeLetter) onBg else onBg.copy(alpha = 0.45f)
-                        )
-                    }
-                }
-            }
-
-            activeLetter?.let { l ->
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(88.dp),
-                    shape = MaterialTheme.shapes.large,
-                    color = onBg.copy(alpha = 0.12f)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(l.toString(), fontSize = 40.sp, color = onBg)
-                    }
-                }
+                        .padding(vertical = 12.dp)
+                )
             }
         }
     }
