@@ -571,62 +571,7 @@ fun DrawerScreen(
             val l = letters[i]
             if (l != activeLetter) {
                 activeLetter = l
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                firstIndex[l]?.let { idx -> scope.launch { listState.scrollToItem(idx) } }
-            }
-        }
-    }
-
-    LaunchedEffect(query) {
-        listState.scrollToItem(0)
-    }
-
-    LaunchedEffect(query) {
-        if (settings.autoLaunch && !pickMode && query.isNotBlank()) {
-            delay(400)
-            val matches = apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
-            if (matches.size == 1) onSelect(matches[0])
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .imePadding()
-            .padding(horizontal = 24.dp)
-    ) {
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            if (pickMode) "PILIH APP FAVORIT" else "APPLICATIONS",
-            fontSize = (18f * s).sp,
-            color = onBg,
-            fontWeight = FontWeight.Medium
-        )
-
-        if (pickMode) {
-            TextButton(onClick = onClearSlot) {
-                Text("Kosongkan slot ini", color = onBg.copy(alpha = 0.6f))
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        BasicTextField(
-            value = query,
-            onValueChange = { query = it },
-            singleLine = true,
-            cursorBrush = SolidColor(onBg),
-            textStyle = TextStyle(color = onBg, fontSize = (16f * s).sp),
-            decorationBox = { innerTextField ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text(
-                            "Search apps...",
-                            fontSize = (16f * s).sp,
-                            color = onBg.copy(alpha = 0.4f)
-                        )
+                   ) 
 private fun letterOf(label: String): Char {
     val c = label.trim().firstOrNull()?.uppercaseChar() ?: '#'
     return if (c in 'A'..'Z') c else '#'
