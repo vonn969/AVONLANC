@@ -7,49 +7,22 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.ui.graphics.graphicsLayer
 
 data class LauncherApp(
     val name: String,
@@ -63,6 +36,11 @@ data class UiApp(
 
 enum class Screen { HOME, DRAWER, SETTINGS }
 
+class IconSource(
+    val cached: (String) -> ImageBitmap?,
+    val load: (String) -> ImageBitmap?
+)
+
 class LauncherActions(
     val openApp: (String) -> Unit,
     val openInfo: (String) -> Unit,
@@ -75,7 +53,8 @@ class LauncherActions(
     val requestAdmin: () -> Unit,
     val isAdminActive: () -> Boolean,
     val openLauncherSettings: () -> Unit,
-    val updateSettings: (AvonlanSettings) -> Unit
+    val updateSettings: (AvonlanSettings) -> Unit,
+    val icons: IconSource
 )
 
 class MainActivity : ComponentActivity() {
@@ -88,6 +67,8 @@ class MainActivity : ComponentActivity() {
     private var hidden by mutableStateOf(emptySet<String>())
     private var renames by mutableStateOf(emptyMap<String, String>())
     private var homeTick by mutableIntStateOf(0)
+
+    private val iconCache = ConcurrentHashMap<String, ImageBitmap>()
 
     private val adminComponent by lazy {
         ComponentName(this, AvonlanAdminReceiver::class.java)
@@ -106,7 +87,11 @@ class MainActivity : ComponentActivity() {
             requestAdmin = { requestAdmin() },
             isAdminActive = { isAdminActive() },
             openLauncherSettings = { safeStart(Intent(Settings.ACTION_HOME_SETTINGS)) },
-            updateSettings = { updateSettings(it) }
+            updateSettings = { updateSettings(it) },
+            icons = IconSource(
+                cached = { iconCache[it] },
+                load = { loadIcon(it) }
+            )
         )
     }
 
@@ -182,6 +167,15 @@ class MainActivity : ComponentActivity() {
             .distinctBy { it.packageName }
     }
 
+    private fun loadIcon(pkg: String): ImageBitmap? {
+        iconCache[pkg]?.let { return it }
+        val bitmap = runCatching {
+            packageManager.getApplicationIcon(pkg).toBitmap(108, 108).asImageBitmap()
+        }.getOrNull()
+        if (bitmap != null) iconCache[pkg] = bitmap
+        return bitmap
+    }
+
     private fun safeStart(intent: Intent) {
         runCatching { startActivity(intent) }
     }
@@ -247,628 +241,5 @@ class MainActivity : ComponentActivity() {
         } else {
             requestAdmin()
         }
-    }
-}
-
-private fun toUi(app: LauncherApp, renames: Map<String, String>) =
-    UiApp(app.packageName, renames[app.packageName] ?: app.name)
-
-private fun <T> List<T>.cycle(current: T): T =
-    this[(indexOf(current) + 1) % size]
-
-@Composable
-fun AvonlanRoot(
-    allApps: List<LauncherApp>,
-    renames: Map<String, String>,
-    hidden: Set<String>,
-    favorites: List<String>,
-    settings: AvonlanSettings,
-    homeTick: Int,
-    actions: LauncherActions
-) {
-    var screen by remember { mutableStateOf(Screen.HOME) }
-    var pickSlot by remember { mutableStateOf<Int?>(null) }
-    var menuApp by remember { mutableStateOf<UiApp?>(null) }
-    var renameTarget by remember { mutableStateOf<UiApp?>(null) }
-
-    LaunchedEffect(homeTick) {
-        screen = Screen.HOME
-        pickSlot = null
-        menuApp = null
-        renameTarget = null
-    }
-
-    val visibleApps = remember(allApps, renames, hidden) {
-        allApps
-            .filter { it.packageName !in hidden }
-            .map { toUi(it, renames) }
-            .sortedBy { it.label.lowercase() }
-    }
-
-    val hiddenApps = remember(allApps, renames, hidden) {
-        allApps
-            .filter { it.packageName in hidden }
-            .map { toUi(it, renames) }
-            .sortedBy { it.label.lowercase() }
-    }
-
-    val favApps = remember(favorites, visibleApps) {
-        favorites.map { pkg ->
-            if (pkg.isBlank()) null else visibleApps.firstOrNull { it.packageName == pkg }
-        }
-    }
-
-    BackHandler(enabled = screen != Screen.HOME) {
-        screen = Screen.HOME
-        pickSlot = null
-    }
-
-    val homeGestures = Modifier
-        .pointerInput(settings.doubleTapLock) {
-            detectTapGestures(
-                onDoubleTap = { if (settings.doubleTapLock) actions.lock() },
-                onLongPress = { screen = Screen.SETTINGS }
-            )
-        }
-        .pointerInput(Unit) {
-            var total = 0f
-            detectVerticalDragGestures(
-                onDragStart = { total = 0f },
-                onVerticalDrag = { _, amount -> total += amount },
-                onDragEnd = {
-                    if (total < -80f) {
-                        pickSlot = null
-                        screen = Screen.DRAWER
-                    }
-                },
-                onDragCancel = { total = 0f }
-            )
-        }
-
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
-        when (screen) {
-            Screen.HOME -> HomeScreen(
-                settings = settings,
-                favorites = favApps,
-                onOpen = { actions.openApp(it) },
-                onPick = { index ->
-                    pickSlot = index
-                    screen = Screen.DRAWER
-                },
-                modifier = homeGestures
-            )
-
-            Screen.DRAWER -> DrawerScreen(
-                apps = visibleApps,
-                settings = settings,
-                pickMode = pickSlot != null,
-                onSelect = { app ->
-                    val slot = pickSlot
-                    if (slot != null) {
-                        actions.setFavorite(slot, app.packageName)
-                        pickSlot = null
-                    } else {
-                        actions.openApp(app.packageName)
-                    }
-                    screen = Screen.HOME
-                },
-                onLongPressApp = { app ->
-                    if (pickSlot == null) menuApp = app
-                },
-                onClearSlot = {
-                    val slot = pickSlot
-                    if (slot != null) actions.setFavorite(slot, "")
-                    pickSlot = null
-                    screen = Screen.HOME
-                }
-            )
-
-            Screen.SETTINGS -> SettingsScreen(
-                settings = settings,
-                hiddenApps = hiddenApps,
-                actions = actions
-            )
-        }
-    }
-
-    menuApp?.let { app ->
-        AlertDialog(
-            onDismissRequest = { menuApp = null },
-            title = { Text(app.label) },
-            text = {
-                Column {
-                    MenuItem("Ganti nama") {
-                        renameTarget = app
-                        menuApp = null
-                    }
-                    MenuItem("Sembunyikan") {
-                        actions.hideApp(app.packageName)
-                        menuApp = null
-                    }
-                    MenuItem("Info app") {
-                        actions.openInfo(app.packageName)
-                        menuApp = null
-                    }
-                    MenuItem("Uninstall") {
-                        actions.uninstall(app.packageName)
-                        menuApp = null
-                    }
-                }
-            },
-            confirmButton = {}
-        )
-    }
-
-    renameTarget?.let { app ->
-        var text by remember(app.packageName) { mutableStateOf(app.label) }
-        AlertDialog(
-            onDismissRequest = { renameTarget = null },
-            title = { Text("Ganti nama") },
-            text = {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    actions.renameApp(app.packageName, text)
-                    renameTarget = null
-                }) { Text("Simpan") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    actions.renameApp(app.packageName, "")
-                    renameTarget = null
-                }) { Text("Reset") }
-            }
-        )
-    }
-}
-
-@Composable
-private fun MenuItem(text: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Text(text, modifier = Modifier.fillMaxWidth())
-    }
-}
-
-@Composable
-fun HomeScreen(
-    settings: AvonlanSettings,
-    favorites: List<UiApp?>,
-    onOpen: (String) -> Unit,
-    onPick: (Int) -> Unit,
-    modifier: Modifier
-) {
-    val s = settings.textSize.scale
-    val onBg = MaterialTheme.colorScheme.onBackground
-
-    val hAlign: Alignment.Horizontal = when (settings.align) {
-        HomeAlign.LEFT -> Alignment.Start
-        HomeAlign.CENTER -> Alignment.CenterHorizontally
-        HomeAlign.RIGHT -> Alignment.End
-    }
-    val tAlign = when (settings.align) {
-        HomeAlign.LEFT -> TextAlign.Start
-        HomeAlign.CENTER -> TextAlign.Center
-        HomeAlign.RIGHT -> TextAlign.End
-    }
-
-    var time by remember { mutableStateOf("") }
-    var date by remember { mutableStateOf("") }
-
-    LaunchedEffect(settings.clock24) {
-        val timeFmt = SimpleDateFormat(
-            if (settings.clock24) "HH:mm" else "hh:mm a",
-            Locale.getDefault()
-        )
-        val dateFmt = SimpleDateFormat("EEEE, dd MMMM", Locale.getDefault())
-        while (true) {
-            val now = Date()
-            time = timeFmt.format(now)
-            date = dateFmt.format(now)
-            delay(60_000L - System.currentTimeMillis() % 60_000L + 50L)
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .then(modifier)
-            .systemBarsPadding()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = hAlign
-    ) {
-        Text(
-            time,
-            fontSize = (76f * s).sp,
-            fontWeight = FontWeight.Light,
-            textAlign = tAlign,
-            color = onBg
-        )
-
-        Spacer(Modifier.height(4.dp))
-
-        Text(
-            date,
-            fontSize = (14f * s).sp,
-            textAlign = tAlign,
-            color = onBg.copy(alpha = 0.6f)
-        )
-
-        Spacer(Modifier.height(40.dp))
-
-        favorites.forEachIndexed { index, app ->
-            Text(
-                text = app?.label ?: "+",
-                fontSize = (22f * s).sp,
-                fontWeight = FontWeight.Light,
-                textAlign = tAlign,
-                color = onBg.copy(alpha = if (app == null) 0.3f else 1f),
-                modifier = Modifier
-                    .pointerInput(app?.packageName) {
-                        detectTapGestures(
-                            onTap = {
-                                if (app != null) onOpen(app.packageName) else onPick(index)
-                            },
-                            onLongPress = { onPick(index) }
-                        )
-                    }
-                    .padding(vertical = 8.dp)
-            )
-        }
-    }
-}
-
-private fun letterOf(label: String): Char {
-    val c = label.trim().firstOrNull()?.uppercaseChar() ?: '#'
-    return if (c in 'A'..'Z') c else '#'
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun DrawerScreen(
-    apps: List<UiApp>,
-    settings: AvonlanSettings,
-    pickMode: Boolean,
-    onSelect: (UiApp) -> Unit,
-    onLongPressApp: (UiApp) -> Unit,
-    onClearSlot: () -> Unit
-) {
-    val s = settings.textSize.scale
-    val onBg = MaterialTheme.colorScheme.onBackground
-    var query by remember { mutableStateOf("") }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    val haptic = LocalHapticFeedback.current
-
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val progress by animateFloatAsState(
-        targetValue = if (shown) 1f else 0f,
-        animationSpec = tween(220),
-        label = "drawerIn"
-    )
-
-    val filtered = remember(apps, query) {
-        if (query.isBlank()) apps
-        else apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
-    }
-
-    val sections = remember(filtered, query) {
-        if (query.isNotBlank()) {
-            listOf('\u0000' to filtered)
-        } else {
-            filtered
-                .groupBy { letterOf(it.label) }
-                .toSortedMap(compareBy<Char> { if (it == '#') Char.MAX_VALUE else it })
-                .map { (letter, list) -> letter to list }
-        }
-    }
-
-    val firstIndex = remember(sections) {
-        val map = LinkedHashMap<Char, Int>()
-        var index = 0
-        sections.forEach { (letter, list) ->
-            map[letter] = index
-            index += 1 + list.size
-        }
-        map
-    }
-    val letters = remember(firstIndex) { firstIndex.keys.toList() }
-    val showBar = query.isBlank() && letters.size > 1
-
-    var activeLetter by remember { mutableStateOf<Char?>(null) }
-    var barHeight by remember { mutableIntStateOf(0) }
-
-    val jump: (Float) -> Unit = { y ->
-        if (letters.isNotEmpty() && barHeight > 0) {
-            val i = (y / barHeight * letters.size).toInt().coerceIn(0, letters.size - 1)
-            val l = letters[i]
-            if (l != activeLetter) {
-                activeLetter = l
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                firstIndex[l]?.let { idx -> scope.launch { listState.scrollToItem(idx) } }
-            }
-        }
-    }
-
-    LaunchedEffect(query) {
-        listState.scrollToItem(0)
-    }
-
-    LaunchedEffect(query) {
-        if (settings.autoLaunch && !pickMode && query.isNotBlank()) {
-            delay(400)
-            val matches = apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
-            if (matches.size == 1) onSelect(matches[0])
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer {
-                alpha = progress
-                translationY = (1f - progress) * 48.dp.toPx()
-            }
-            .systemBarsPadding()
-            .imePadding()
-            .padding(horizontal = 24.dp)
-    ) {
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            if (pickMode) "PILIH APP FAVORIT" else "APPLICATIONS",
-            fontSize = (18f * s).sp,
-            color = onBg,
-            fontWeight = FontWeight.Medium
-        )
-
-        if (pickMode) {
-            TextButton(onClick = onClearSlot) {
-                Text("Kosongkan slot ini", color = onBg.copy(alpha = 0.6f))
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        BasicTextField(
-            value = query,
-            onValueChange = { query = it },
-            singleLine = true,
-            cursorBrush = SolidColor(onBg),
-            textStyle = TextStyle(color = onBg, fontSize = (16f * s).sp),
-            decorationBox = { innerTextField ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text(
-                            "Search apps...",
-                            fontSize = (16f * s).sp,
-                            color = onBg.copy(alpha = 0.4f)
-                        )
-                    }
-                    innerTextField()
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(end = if (showBar) 32.dp else 0.dp)
-            ) {
-                sections.forEach { (letter, list) ->
-                    if (letter != '\u0000') {
-                        stickyHeader(key = "header_$letter") {
-                            Text(
-                                text = letter.toString(),
-                                fontSize = (13f * s).sp,
-                                fontWeight = FontWeight.Medium,
-                                color = onBg.copy(alpha = 0.5f),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.background)
-                                    .padding(top = 12.dp, bottom = 4.dp)
-                            )
-                        }
-                    }
-
-                    items(list, key = { it.packageName }) { app ->
-                        Text(
-                            text = app.label,
-                            fontSize = (18f * s).sp,
-                            color = onBg,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .animateItem()
-                                .pointerInput(app.packageName) {
-                                    detectTapGestures(
-                                        onTap = { onSelect(app) },
-                                        onLongPress = { onLongPressApp(app) }
-                                    )
-                                }
-                                .padding(vertical = 12.dp)
-                        )
-                    }
-                }
-            }
-
-            if (showBar) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .fillMaxHeight()
-                        .width(32.dp)
-                        .onSizeChanged { barHeight = it.height }
-                        .pointerInput(letters) {
-                            detectTapGestures(
-                                onTap = { offset ->
-                                    jump(offset.y)
-                                    activeLetter = null
-                                }
-                            )
-                        }
-                        .pointerInput(letters) {
-                            detectVerticalDragGestures(
-                                onDragStart = { offset -> jump(offset.y) },
-                                onVerticalDrag = { change, _ -> jump(change.position.y) },
-                                onDragEnd = { activeLetter = null },
-                                onDragCancel = { activeLetter = null }
-                            )
-                        },
-                    verticalArrangement = Arrangement.SpaceEvenly,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    letters.forEach { l ->
-                        Text(
-                            text = l.toString(),
-                            fontSize = (11f * s).sp,
-                            color = if (l == activeLetter) onBg else onBg.copy(alpha = 0.45f)
-                        )
-                    }
-                }
-            }
-
-            activeLetter?.let { l ->
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(88.dp),
-                    shape = MaterialTheme.shapes.large,
-                    color = onBg.copy(alpha = 0.12f)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(l.toString(), fontSize = 40.sp, color = onBg)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsScreen(
-    settings: AvonlanSettings,
-    hiddenApps: List<UiApp>,
-    actions: LauncherActions
-) {
-    val s = settings.textSize.scale
-    val onBg = MaterialTheme.colorScheme.onBackground
-
-    fun onOff(value: Boolean) = if (value) "ON" else "OFF"
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .padding(horizontal = 24.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            "SETTINGS",
-            fontSize = (18f * s).sp,
-            fontWeight = FontWeight.Medium,
-            color = onBg
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        SettingRow("Tema", settings.themeMode.name, s) {
-            actions.updateSettings(
-                settings.copy(themeMode = AvonlanThemeMode.entries.cycle(settings.themeMode))
-            )
-        }
-
-        SettingRow("Ukuran teks", settings.textSize.name, s) {
-            actions.updateSettings(
-                settings.copy(textSize = TextSize.entries.cycle(settings.textSize))
-            )
-        }
-
-        SettingRow("Rata teks home", settings.align.name, s) {
-            actions.updateSettings(
-                settings.copy(align = HomeAlign.entries.cycle(settings.align))
-            )
-        }
-
-        SettingRow("Format jam", if (settings.clock24) "24 JAM" else "12 JAM", s) {
-            actions.updateSettings(settings.copy(clock24 = !settings.clock24))
-        }
-
-        SettingRow("Status bar", if (settings.showStatusBar) "TAMPIL" else "SEMBUNYI", s) {
-            actions.updateSettings(settings.copy(showStatusBar = !settings.showStatusBar))
-        }
-
-        SettingRow("Double tap kunci layar", onOff(settings.doubleTapLock), s) {
-            val enable = !settings.doubleTapLock
-            actions.updateSettings(settings.copy(doubleTapLock = enable))
-            if (enable && !actions.isAdminActive()) actions.requestAdmin()
-        }
-
-        Text(
-            "Butuh izin Device Admin. Kalau mau uninstall AVONLAN, matiin dulu di Settings > Security > Device admin apps.",
-            fontSize = (11f * s).sp,
-            color = onBg.copy(alpha = 0.45f)
-        )
-
-        SettingRow("Auto-launch hasil search", onOff(settings.autoLaunch), s) {
-            actions.updateSettings(settings.copy(autoLaunch = !settings.autoLaunch))
-        }
-
-        SettingRow("Ganti default launcher", "", s) {
-            actions.openLauncherSettings()
-        }
-
-        if (hiddenApps.isNotEmpty()) {
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                "APP TERSEMBUNYI (tap buat tampilkan lagi)",
-                fontSize = (12f * s).sp,
-                color = onBg.copy(alpha = 0.6f)
-            )
-
-            hiddenApps.forEach { app ->
-                SettingRow(app.label, "TAMPILKAN", s) {
-                    actions.unhideApp(app.packageName)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(32.dp))
-    }
-}
-
-@Composable
-private fun SettingRow(label: String, value: String, s: Float, onClick: () -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, fontSize = (16f * s).sp, color = onBg)
-        Text(value, fontSize = (14f * s).sp, color = onBg.copy(alpha = 0.6f))
     }
 }
